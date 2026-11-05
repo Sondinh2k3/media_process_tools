@@ -10,3 +10,5 @@ dist/
 *.sqlite3*
 *.log
 test-artifacts/
+video
+/exports/

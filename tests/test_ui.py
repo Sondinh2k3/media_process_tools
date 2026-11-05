@@ -40,6 +40,41 @@ def test_open_play_pause_seek_and_bad_file(qtbot, synthetic_video, tmp_path):
     window.close()
 
 
+def test_cached_source_switch_forced_refresh_and_unchanged_autosave(
+    qtbot, synthetic_video, monkeypatch
+):
+    from video_dataset_tool.ui import main_window
+
+    window = MainWindow()
+    qtbot.addWidget(window)
+    assert not window.editor.export_button.isEnabled()
+    window.add_paths([synthetic_video])
+    qtbot.waitUntil(lambda: window.current_metadata is not None and not window.tasks, timeout=15000)
+    window.viewer.player.pause()
+    window.viewer.pending_seek = None
+    window.save_draft()
+    changes = window.repository.connection.total_changes
+    for _ in range(10):
+        window.save_draft()
+    assert window.repository.connection.total_changes == changes
+    original = main_window.probe_video
+    calls = []
+
+    def probe(path):
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(main_window, "probe_video", probe)
+    window.source_selected(window.sources.currentItem())
+    assert window.current_metadata is not None and not calls
+    assert window.editor.export_button.isEnabled()
+    window.refresh_library()
+    assert not window.editor.export_button.isEnabled()
+    qtbot.waitUntil(lambda: window.current_metadata is not None and not window.tasks, timeout=15000)
+    assert len(calls) == 1
+    window.close()
+
+
 def test_editor_export_worker_and_draft(qtbot, synthetic_video, tmp_path):
     window = MainWindow()
     qtbot.addWidget(window)
@@ -66,6 +101,26 @@ def test_editor_export_worker_and_draft(qtbot, synthetic_video, tmp_path):
     assert window.repository.clips()[0]["status"] == "completed"
     assert window.repository.clips()[0]["source_video_id"] == window.current_source_id
     assert window.drafts[window.current_path]["notes"] == "Hàng hóa cần xem xét"
+    window.close()
+
+
+def test_cancel_button_waits_for_worker_cleanup(qtbot, synthetic_video, tmp_path):
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.add_paths([synthetic_video])
+    qtbot.waitUntil(lambda: window.current_metadata is not None and not window.tasks, timeout=15000)
+    window.output_root = tmp_path / "cancelled-clips"
+    window.start_export()
+    assert window.editor.cancel_button.isEnabled()
+    window.cancel_export()
+    assert not window.editor.cancel_button.isEnabled()
+    assert window.editor.cancel_button.text() == "Đang hủy…"
+    qtbot.waitUntil(lambda: window.export_worker is None, timeout=20000)
+    assert window.export_results[-1].status == "cancelled"
+    assert window.repository.clips()[0]["status"] == "cancelled"
+    assert window.editor.export_button.isEnabled()
+    assert not window.export_timer.isActive()
+    assert not list(window.output_root.rglob("*.partial*"))
     window.close()
 
 
@@ -102,11 +157,11 @@ def test_reopen_restores_library_draft_output_and_clips(qtbot, synthetic_video, 
     assert rows[0]["requested_in_ms"] == 500
     assert rows[0]["event_start_ms"] == 1200
     assert Path(rows[0]["output_path"]).is_file()
-    assert reopened.clip_table.table.rowCount() == 1
+    assert reopened.clip_table.table.model().rowCount() == 1
     reopened.clip_table.category_filter.setCurrentIndex(
         reopened.clip_table.category_filter.findData("normal")
     )
-    assert reopened.clip_table.table.rowCount() == 0
+    assert reopened.clip_table.table.model().rowCount() == 0
     qtbot.waitUntil(lambda: not reopened.tasks, timeout=15000)
     reopened.close()
 
@@ -214,4 +269,25 @@ def test_disappearing_source_keeps_failed_history(qtbot, synthetic_video, tmp_pa
     window.repository.refresh_availability()
     assert window.repository.sources()[0]["availability"] == "missing"
     assert len(window.repository.clips()) == 1
+    window.close()
+
+
+def test_gui_keeps_original_video_id_case(qtbot, synthetic_video, tmp_path):
+    import shutil
+    from pathlib import Path
+
+    source = tmp_path / "Video_Camera_ABC_1234_MixedCase.mp4"
+    shutil.copyfile(synthetic_video, source)
+    window = MainWindow()
+    qtbot.addWidget(window)
+    window.add_paths([source])
+    qtbot.waitUntil(lambda: window.current_metadata is not None and not window.tasks, timeout=15000)
+    window.output_root = tmp_path / "clips"
+    window.editor.start.setText("00:00:01.200")
+    window.editor.end.setText("00:00:03.600")
+    window.start_export()
+    qtbot.waitUntil(lambda: window.export_worker is None, timeout=20000)
+    result = window.export_results[-1]
+    assert result.status == "completed"
+    assert Path(result.output_path).name.startswith(source.stem + "__00-00-01.200_00-00-03.600__")
     window.close()

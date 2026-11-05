@@ -1,25 +1,25 @@
-import argparse
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QApplication, QMessageBox
-
 from .core.paths import app_data_dir
-from .ui.main_window import MainWindow
 
 
 def main() -> int:
-    for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(encoding="utf-8", errors="replace")
-    parser = argparse.ArgumentParser(description="Video Dataset Tool V1")
-    parser.add_argument("--data-dir", type=Path, help="Thư mục database/settings/log cho dataset")
-    parser.add_argument("--smoke-exit-ms", type=int, help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    from .cli import main as cli_main
+
+    return cli_main()
+
+
+def run_gui(data_dir: Path | None = None, smoke_exit_ms: int | None = None) -> int:
+    # CLI cuts only need QtCore for the shared dataset lock; no GUI/display is initialized.
+    from PySide6.QtCore import QTimer
+    from PySide6.QtGui import QFont
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    from .ui.main_window import MainWindow
+
     application = QApplication(sys.argv[:1])
     application.setApplicationName("VideoDatasetTool")
     application.setOrganizationName("VideoDatasetTool")
@@ -44,7 +44,7 @@ def main() -> int:
 
     sys.excepthook = report_exception
     try:
-        data_dir = args.data_dir or app_data_dir()
+        data_dir = data_dir or app_data_dir()
         data_dir.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(
             data_dir / "application.log", maxBytes=2_000_000, backupCount=2, encoding="utf-8"
@@ -52,8 +52,8 @@ def main() -> int:
         logging.basicConfig(level=logging.INFO, handlers=[handler])
         window = MainWindow(data_dir)
         window.show()
-        if args.smoke_exit_ms:
-            QTimer.singleShot(args.smoke_exit_ms, window.close)
+        if smoke_exit_ms:
+            QTimer.singleShot(smoke_exit_ms, window.close)
         return application.exec()
     except Exception as exc:
         logging.exception("Application startup failed")

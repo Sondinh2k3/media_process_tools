@@ -1,8 +1,54 @@
 # Video Dataset Tool V1
 
-Ứng dụng desktop **Python 3.11+ / PySide6**, dùng để xem video, chọn khoảng thời gian, cắt clip và quản lý nguồn dữ liệu. Giao diện và hướng dẫn bằng tiếng Việt. Nhãn `positive` chỉ biểu thị **nghi vấn cần xem xét**, không phải kết luận vi phạm.
+Ứng dụng desktop và dòng lệnh **Python 3.11+ / PySide6**, dùng để xem video, chọn khoảng thời gian, cắt clip và quản lý nguồn dữ liệu. Giao diện và hướng dẫn bằng tiếng Việt. Nhãn `positive` chỉ biểu thị **nghi vấn cần xem xét**, không phải kết luận vi phạm.
 
 PySide6 được pin **6.10.3** trong `pyproject.toml` để tái lập môi trường kiểm chứng. Không tự nâng Qt trước khi chạy lại bộ kiểm thử multimedia.
+
+## Cắt bằng một lệnh, không mở giao diện
+
+Tại thư mục gốc dự án, ví dụ cắt video ID `Video_000` từ giây 10.250 đến 20.750, lưu trực tiếp vào thư mục bạn chọn:
+
+```powershell
+.\.venv\Scripts\python.exe -m video_dataset_tool cut --input ".\video\Video_000.mp4" --start 10.250 --end 20.750 --output-dir ".\exports\Video_000"
+```
+
+Mặc định CLI dùng **Precise → MP4 (H.264/AAC), preset `veryfast`, CRF 18**. Dùng `--preset medium` để chọn cấu hình mã hóa cũ; `--preset fast` cũng được hỗ trợ. Preset thay đổi tốc độ/độ nén/chất lượng, không crop/resize hoặc đổi khoảng cắt. Không khởi tạo cửa sổ hoặc yêu cầu display server. Video gốc chỉ được đọc. Tên clip mới giữ **toàn bộ ID từ tên nguồn, kể cả hoa/thường**, thêm khoảng cắt và UUID:
+
+```text
+Video_000__00-00-10.250_00-00-20.750__<UUID>.mp4
+```
+
+Không còn cắt ngắn ID còn 36 ký tự. Quy tắc tên này áp dụng cả GUI và CLI cho các lần xuất mới; clip cũ được giữ nguyên. Ký tự cấm trên Windows được thay bằng `_`; tên quá dài để lưu an toàn sẽ được báo lỗi, không âm thầm mất ID. Đường dẫn Windows dài dùng tiền tố extended path trong thao tác I/O.
+
+`--output-dir` của CLI là **thư mục đích trực tiếp**, không tự thêm thư mục nhóm. Thư mục chưa có sẽ được tạo. Chạy lại cùng khoảng tạo clip UUID khác, không ghi đè. GUI vẫn chia clip theo nhóm như trước.
+
+Các cách dùng khác:
+
+```powershell
+# Dùng thời gian HH:MM:SS hoặc HH:MM:SS.mmm
+.\.venv\Scripts\python.exe -m video_dataset_tool cut --input ".\video\Video_000.mp4" --start 00:00:10.250 --end 00:00:20.750 --output-dir "E:\tools\Data_process\exports\Video_000"
+
+# Dùng độ dài 10.5 giây thay vì OUT; không dùng --end cùng --duration
+.\.venv\Scripts\python.exe -m video_dataset_tool cut --input ".\video\Video_000.mp4" --start 10.250 --duration 10.500 --output-dir ".\exports\Video_000"
+
+# Cắt nhanh, giữ bitstream HEVC nếu nguồn HEVC; kết quả MKV có thể lệch keyframe
+.\.venv\Scripts\python.exe -m video_dataset_tool cut --input ".\video\Video_000.mp4" --start 10.250 --end 20.750 --output-dir ".\exports\Video_000" --mode fast
+
+# Dataset metadata riêng + JSON cho script; clip vẫn ở đúng output-dir
+.\.venv\Scripts\python.exe -m video_dataset_tool cut --input ".\video\Video_000.mp4" --start 10.250 --end 20.750 --output-dir ".\exports\Video_000" --data-dir ".\exports\.dataset" --json
+```
+
+Nếu đã kích hoạt `.venv`, có thể dùng `python -m video_dataset_tool cut ...` hoặc `video-dataset-tool cut ...`. Trên Ubuntu dùng `.venv/bin/python -m video_dataset_tool cut ...` với đường dẫn Linux; phần này chưa chạy kiểm chứng trên Ubuntu.
+
+Thời gian CLI chấp nhận số giây hoặc `HH:MM:SS[.mmm]`, tối đa 3 chữ số thập phân. Mặc định `--start 0`; cần `--end` hoặc `--duration`. `--category` mặc định `uncertain`, không tự suy luận tình huống; có thể thêm `--notes`. Có tiến độ trên stderr, Ctrl+C để hủy và dọn file tạm. Mã thoát: 0 thành công, 1 lỗi xử lý, 2 sai cú pháp lệnh, 130 đã hủy. `--json` chỉ ghi kết quả JSON trên stdout để script đọc được.
+
+Metadata CLI vẫn lưu SQLite, mặc định chung thư mục dữ liệu OS với GUI. Nếu GUI/lệnh khác đang giữ dataset đó, đóng phiên ấy hoặc dùng `--data-dir` riêng. Để xem lịch sử các clip thử trong lần kiểm chứng này:
+
+```powershell
+.\.venv\Scripts\python.exe -m video_dataset_tool --data-dir ".\exports\.dataset"
+```
+
+Đã thử video người dùng `Video_000.mp4` (HEVC/AAC, 1920×1080, 114.455 giây): đoạn yêu cầu 10.500 giây xuất Precise dài **10.500 giây**, Fast dài **11.370 giây**; cả hai giải mã hết video/audio không lỗi, nguồn giữ nguyên hash/size/mtime. Xem [báo cáo kiểm chứng CLI và video thực tế](docs/CLI_VIDEO_VALIDATION.md).
 
 ## Chạy ngay trong workspace này (Windows)
 
@@ -64,9 +110,13 @@ Không chạy GUI trong máy Linux chỉ có terminal nếu chưa cấu hình m�
 3. **Đặt IN/OUT** tại vị trí hiện tại hoặc nhập `HH:MM:SS.mmm`. Chỉnh đệm trước/sau nếu cần; ứng dụng giới hạn đệm ở đầu/cuối video. **Xem trước khoảng xuất** để kiểm tra.
 4. Chọn nhóm, nhập loại vật và ghi chú. Khoảng **sự kiện** là tùy chọn, mặc định trống; nếu nhập thì cần cả hai đầu và nằm trong khoảng clip xuất.
 5. Chọn **Thư mục xuất**, chọn Fast hoặc Precise, bấm **Xuất clip**. Có tiến độ và nút hủy. Mỗi lần chỉ chạy một tác vụ; có thể tiếp tục xem/chỉnh bản nháp trong lúc xử lý.
-6. Xem **Lịch sử clip**, lọc theo video/nhóm/trạng thái hoặc tìm trong tên nguồn, loại vật, ghi chú, UUID. Chọn clip rồi mở thư mục hoặc xem chi tiết. **Xuất CSV** ghi toàn bộ lịch sử, kể cả tác vụ thất bại/hủy.
+6. Xem **Lịch sử clip**, lọc theo video/nhóm/trạng thái hoặc tìm trong tên nguồn, loại vật, ghi chú, UUID. Bảng hiển thị 200 clip/trang, dùng **Trước/Sau** để chuyển trang. Tìm kiếm sau khi ngừng gõ 250 ms; Enter tìm ngay. Chọn clip rồi mở thư mục hoặc xem chi tiết. **Xuất CSV** ghi toàn bộ lịch sử, kể cả tác vụ thất bại/hủy và các trang khác.
 
 Bản nháp được lưu theo từng video sau khi ngừng nhập khoảng 350 ms, mỗi 2 giây, trước khi đổi video/xuất và khi đóng. Lần mở lại khôi phục thư viện, bản nháp, vị trí phát, thư mục xuất và bố cục. **Thiết lập** cấu hình chế độ cắt và padding mặc định cho video chưa có bản nháp.
+
+Các lần lưu bản nháp không đổi không ghi lại database. Khi quay lại video có metadata đã lưu và size/mtime còn khớp, GUI dùng cache để mở nhanh hơn; **Kiểm tra nguồn** buộc đọc lại bằng FFprobe. Precise có lựa chọn **Tốc độ mã hóa** ngay trong thông tin clip, được giữ theo bản nháp. Thanh trạng thái hiển thị thời gian chạy và thời gian còn lại ước tính; bấm hủy sẽ khóa nút hủy trong lúc dọn file tạm.
+
+Xem [báo cáo tối ưu hiệu năng](docs/PERFORMANCE.md) và cách tự chạy benchmark. Database được nâng tự động lên schema 2, giữ lịch sử cũ và ghi lại preset cho các tác vụ mới.
 
 ## Hai chế độ cắt
 
@@ -81,7 +131,7 @@ Chỉ báo hoàn tất khi FFmpeg thành công, file có ít nhất 128 byte và
 
 ## Bảo toàn và lưu trữ dữ liệu
 
-- Video nguồn chỉ được đọc. Tên clip gồm tên nguồn rút gọn + UUID, chia vào thư mục nhóm. File tạm thuộc ứng dụng được kiểm tra rồi mới công bố; không ghi đè clip cũ.
+- Video nguồn chỉ được đọc. Tên clip gồm ID nguồn đầy đủ + khoảng cắt + UUID; GUI chia thư mục nhóm, CLI lưu trực tiếp trong `--output-dir`. File tạm thuộc ứng dụng được kiểm tra rồi mới công bố; không ghi đè clip cũ.
 - SQLite lưu UUID nguồn, đường dẫn canonical, size/mtime, thông số video, khoảng yêu cầu, khoảng sự kiện, ghi chú, chế độ, trạng thái và lỗi. Mỗi clip giữ thêm snapshot đường dẫn/size/mtime nguồn.
 - IN/OUT sau khi cộng padding là `requested_in_ms`/`requested_out_ms`. Ô IN/OUT và padding gốc được giữ trong bản nháp. Ứng dụng không tự điền khoảng sự kiện bằng khoảng cắt.
 - Mặc định Windows: `%LOCALAPPDATA%\VideoDatasetTool`; Linux: `${XDG_DATA_HOME:-~/.local/share}/VideoDatasetTool`. Có thể đổi bằng `--data-dir` hoặc biến môi trường `VIDEO_DATASET_DATA_DIR`.

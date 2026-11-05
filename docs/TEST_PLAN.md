@@ -2,6 +2,12 @@
 
 Ngày kiểm tra: **04/11/2026** (Asia/Saigon).
 
+Cập nhật **05/11/2026**: bổ sung CLI `cut`, quy tắc giữ nguyên ID nguồn, đường dẫn Windows dài và kiểm chứng riêng trên video người dùng cho phép. Sau tối ưu hiệu năng, bộ tự động hiện tại: **101 tests đạt**, không lỗi/skip (22,53 giây ở lượt đầy đủ). Các mốc 60 tests bên dưới là kết quả nghiệm thu V1 ngày 04/11; 90 tests là mốc hoàn tất CLI trước tối ưu. Xem [kiểm chứng CLI](CLI_VIDEO_VALIDATION.md) và [báo cáo hiệu năng](PERFORMANCE.md).
+
+Kiểm tra bổ sung cho đợt tối ưu: migration schema 1→2 giữ clip/ghi chú/preset cũ; phân trang với timestamp trùng không thiếu/trùng clip; COUNT dùng cùng bộ lọc; CSV vẫn đủ mọi trang; debounce chỉ truy vấn một lần sau chuỗi gõ; giữ lựa chọn khi refresh; đăng ký 1.002 đường dẫn theo lô và chống trùng; bỏ ghi draft/setting giống hệt; cache metadata mất hiệu lực khi size/mtime/trạng thái nguồn đổi; Kiểm tra nguồn buộc probe; nút xuất theo nguồn/khoảng hợp lệ; nút hủy chờ worker cleanup; preset được kiểm tra và truyền đúng vào FFmpeg/CLI.
+
+Desktop smoke mới đạt, có frame giải mã, xuất Fast/Precise và CSV, nguồn tổng hợp nguyên hash. Đã xem ảnh bố cục có bộ chọn preset và phân trang tại `test-artifacts/desktop-performance-2026-11-05`. Trên Video_000 thực tế, bốn clip benchmark và một clip CLI mới giải mã hết video/audio không lỗi; nguồn giữ hash/size/mtime. Benchmark và hiện vật nằm trong thư mục Git ignore, không là fixture tự động.
+
 ## Môi trường đã chạy
 
 - Windows 11 x64, build 26200.
@@ -9,7 +15,7 @@ Ngày kiểm tra: **04/11/2026** (Asia/Saigon).
 - FFmpeg/FFprobe bản BtbN `N-128352-gec887b13a8-20261103`, lưu cục bộ trong `.tools`; bản này có libx264 và AAC. Nguồn phát hành: [BtbN FFmpeg Builds](https://github.com/BtbN/FFmpeg-Builds/releases).
 - **Ubuntu chưa được chạy**. Hướng dẫn cài Ubuntu đã viết nhưng không được xem là kết quả thực thi.
 
-Không dùng video của người dùng. Fixture là testsrc2 + sine do FFmpeg sinh, cùng các biến thể không âm thanh, timestamp offset, VFR và màu đơn sắc dài 3.700 giây.
+Bộ kiểm thử tự động không dùng video của người dùng. Fixture là testsrc2 + sine do FFmpeg sinh, cùng các biến thể không âm thanh, timestamp offset, VFR và màu đơn sắc dài 3.700 giây. Lần kiểm chứng thủ công ngày 05/11 dùng riêng `Video_000.mp4` theo yêu cầu trực tiếp của người dùng, giữ hiện vật cục bộ trong thư mục bị Git ignore.
 
 ## Các mốc đã kiểm tra tuần tự
 
@@ -81,7 +87,7 @@ Hiện vật trong `test-artifacts` được `.gitignore` bỏ qua; không phả
 - Thiếu quyền/hết đĩa được kiểm tra bằng mô phỏng và IO lỗi có kiểm soát, không thay quyền thư mục hệ thống hay cố lấp đầy ổ đĩa thật.
 - Đã kiểm tra định dạng/nội dung CSV bằng Python; **chưa mở bằng Microsoft Excel**.
 - Không xác minh frame đầu của clip đối chiếu từng frame nguồn. Fast luôn approximate; Precise cũng không tuyên bố frame-accurate. Dung sai và NULL/unknown được ghi trong README/ARCHITECTURE.
-- Không thử video quay thật của người dùng, không benchmark video nhiều GB hoặc thư viện hàng trăm nghìn clip. Video >1 giờ dùng fixture nhỏ để kiểm tra timestamp/seek, không đại diện tải xử lý 4K nhiều giờ.
+- Đã thử riêng `Video_000.mp4` ngày 05/11 theo yêu cầu người dùng; chưa benchmark video nhiều GB hoặc thư viện hàng trăm nghìn clip. Video >1 giờ trong bộ tự động dùng fixture nhỏ để kiểm tra timestamp/seek, không đại diện tải xử lý 4K nhiều giờ.
 - Chưa có installer; chạy từ source với `.venv`. Khôi phục hard crash chỉ đánh dấu job failed và giữ file chưa xác minh, không tự nhận completed hoặc xóa dữ liệu.
 
 ## Tự nghiệm thu với video thực tế

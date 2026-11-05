@@ -88,7 +88,9 @@ def test_long_filename(clip, tmp_path):
     request = ClipRequest.create(path, probe_video(path), 1000, 3000, "normal", cut_mode="precise")
     result = export_clip(request, tmp_path / "clips")
     assert result.status == "completed", result.error_message
-    assert len(Path(result.output_path).name) < 90
+    assert Path(result.output_path).name.startswith(path.stem + "__")
+    assert len(Path(result.output_path).name.encode("utf-8")) <= 255
+    assert probe_video(result.output_path).duration_ms > 0
 
 
 def test_long_duration_over_one_hour(tmp_path):

@@ -30,6 +30,9 @@ class ClipEditor(QWidget):
     def __init__(self):
         super().__init__()
         self.duration_ms = 0
+        self.source_ready = False
+        self.busy = False
+        self.range_valid = False
         self.setMinimumWidth(290)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(4, 4, 4, 4)
@@ -85,6 +88,18 @@ class ClipEditor(QWidget):
         self.mode.addItem("Fast · sao chép luồng", "fast")
         self.mode.addItem("Precise · mã hóa lại", "precise")
         form.addRow("Chế độ cắt", self.mode)
+        self.preset = QComboBox()
+        self.preset.addItem("Veryfast · ưu tiên tốc độ", "veryfast")
+        self.preset.addItem("Fast · cân bằng", "fast")
+        self.preset.addItem("Medium · cấu hình cũ", "medium")
+        self.preset.setToolTip(
+            "Chỉ dùng cho Precise. Giữ CRF 18; tốc độ, độ nén và chất lượng có thể khác giữa các preset."
+        )
+        self.preset.setEnabled(False)
+        self.mode.currentIndexChanged.connect(
+            lambda: self.preset.setEnabled(self.mode.currentData() == "precise")
+        )
+        form.addRow("Tốc độ mã hóa", self.preset)
         layout.addLayout(form)
         self.precision_note = QLabel(
             "Fast có thể lệch theo keyframe. Precise mã hóa lại, hướng tới frame gần yêu cầu; không bảo đảm tuyệt đối."
@@ -121,7 +136,7 @@ class ClipEditor(QWidget):
         for field in (self.event_start, self.event_end, self.object_type):
             field.textChanged.connect(self.changed)
         self.notes.textChanged.connect(self.changed)
-        for field in (self.category, self.review, self.mode):
+        for field in (self.category, self.review, self.mode, self.preset):
             field.currentIndexChanged.connect(self.changed)
         self.update_summary()
 
@@ -141,15 +156,28 @@ class ClipEditor(QWidget):
                 f"Xuất: {format_timecode(start)} → {format_timecode(end)}\nĐộ dài dự kiến: {format_timecode(end - start)}"
             )
             self.summary.setStyleSheet("color: #176b55")
+            self.range_valid = True
             self.marks_changed.emit(start, end)
         except ValueError as exc:
             self.summary.setText(str(exc))
             self.summary.setStyleSheet("color: #b42318")
+            self.range_valid = False
+        self.update_actions()
         self.changed.emit()
 
+    def set_source_ready(self, ready):
+        self.source_ready = ready
+        self.update_actions()
+
+    def update_actions(self):
+        self.export_button.setEnabled(self.source_ready and self.range_valid and not self.busy)
+        self.preview_button.setEnabled(self.source_ready and self.range_valid)
+
     def set_busy(self, busy):
-        self.export_button.setEnabled(not busy)
+        self.busy = busy
+        self.update_actions()
         self.cancel_button.setEnabled(busy)
+        self.cancel_button.setText("Hủy tác vụ xuất")
         if busy:
             self.progress.setValue(0)
 
@@ -166,6 +194,7 @@ class ClipEditor(QWidget):
             "category": self.category.currentData(),
             "review": self.review.currentData(),
             "mode": self.mode.currentData(),
+            "preset": self.preset.currentData(),
         }
 
     def load_draft(self, draft, duration_ms):
@@ -177,7 +206,12 @@ class ClipEditor(QWidget):
         for name in ("event_start", "event_end", "object_type"):
             getattr(self, name).setText(draft.get(name, ""))
         self.notes.setPlainText(draft.get("notes", ""))
-        for name, default in (("category", "positive"), ("review", "unreviewed"), ("mode", "fast")):
+        for name, default in (
+            ("category", "positive"),
+            ("review", "unreviewed"),
+            ("mode", "fast"),
+            ("preset", "veryfast"),
+        ):
             combo = getattr(self, name)
             combo.setCurrentIndex(max(0, combo.findData(draft.get(name, default))))
         self.update_summary()

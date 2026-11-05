@@ -1,4 +1,4 @@
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE source_videos (
@@ -53,6 +53,19 @@ def migrate(connection):
         try:
             connection.executescript(
                 "BEGIN IMMEDIATE;\n" + SCHEMA + "\nPRAGMA user_version=1;\nCOMMIT;"
+            )
+        except Exception:
+            connection.rollback()
+            raise
+        version = 1
+    if version == 1:
+        try:
+            connection.executescript(
+                "BEGIN IMMEDIATE;\n"
+                "ALTER TABLE clips ADD COLUMN encoding_preset TEXT NOT NULL DEFAULT 'medium';\n"
+                "CREATE INDEX clips_created ON clips(created_at DESC,id DESC);\n"
+                "CREATE INDEX clips_source_created ON clips(source_video_id,created_at DESC,id DESC);\n"
+                "PRAGMA user_version=2;\nCOMMIT;"
             )
         except Exception:
             connection.rollback()

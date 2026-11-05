@@ -1,7 +1,7 @@
 import math
 from uuid import UUID
 
-from .models import CATEGORIES, ClipRequest
+from .models import CATEGORIES, ENCODING_PRESETS, ClipRequest
 
 
 def validate_range(
@@ -27,6 +27,8 @@ def validate_request(request: ClipRequest):
         raise ValueError("Chọn một trong bốn nhóm tình huống V1.")
     if request.cut_mode not in {"fast", "precise"}:
         raise ValueError("Chế độ cắt không hợp lệ.")
+    if request.encoding_preset not in ENCODING_PRESETS:
+        raise ValueError("Preset mã hóa không hợp lệ.")
     if request.review_status not in {"unreviewed", "reviewed"}:
         raise ValueError("Trạng thái xem xét không hợp lệ.")
     start, end = request.event_start_ms, request.event_end_ms

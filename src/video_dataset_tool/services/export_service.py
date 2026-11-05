@@ -1,6 +1,5 @@
 import logging
 import os
-import re
 import shutil
 import subprocess
 import tempfile
@@ -8,8 +7,9 @@ import threading
 import time
 from pathlib import Path
 
+from ..core.filenames import clip_filename
 from ..core.models import ClipRequest, ExportResult
-from ..core.paths import canonical_path, find_binary, subprocess_options
+from ..core.paths import canonical_path, find_binary, io_path, subprocess_options
 from ..core.validators import validate_request
 from .ffmpeg_service import build_arguments
 from .video_probe import probe_video
@@ -26,7 +26,12 @@ def duration_tolerance_ms(request: ClipRequest) -> int:
 
 
 def export_clip(
-    request: ClipRequest, output_root: Path, cancel: threading.Event | None = None, progress=None
+    request: ClipRequest,
+    output_root: Path,
+    cancel: threading.Event | None = None,
+    progress=None,
+    *,
+    group_by_category: bool = True,
 ) -> ExportResult:
     cancel = cancel or threading.Event()
     temporary = reserved = process = reader = None
@@ -37,33 +42,35 @@ def export_clip(
         binary = find_binary("ffmpeg")
         if not binary or not find_binary("ffprobe"):
             raise ValueError("Thiếu FFmpeg/FFprobe. Kiểm tra PATH và mở lại ứng dụng.")
-        source = Path(request.source_path)
+        source = Path(io_path(request.source_path))
         stat = source.stat()
         if (request.source_size is not None and stat.st_size != request.source_size) or (
             request.source_mtime_ns is not None and stat.st_mtime_ns != request.source_mtime_ns
         ):
             raise ValueError("Video nguồn đã thay đổi từ khi mở. Hãy mở lại video trước khi xuất.")
-        folder = Path(output_root).expanduser().resolve() / request.category
-        folder.mkdir(parents=True, exist_ok=True)
+        folder = Path(output_root).expanduser().resolve()
+        if group_by_category:
+            folder /= request.category
+        Path(io_path(folder)).mkdir(parents=True, exist_ok=True)
         fraction = (
             request.requested_out_ms - request.requested_in_ms
         ) / request.metadata.duration_ms
         estimate = max(
             1_048_576, int(stat.st_size * fraction * (1.2 if request.cut_mode == "fast" else 3))
         )
-        if shutil.disk_usage(folder).free < estimate:
+        if shutil.disk_usage(io_path(folder)).free < estimate:
             raise ValueError(
                 "Dung lượng trống không đủ theo ước lượng. Chọn ổ đĩa khác hoặc giải phóng dung lượng."
             )
-        stem = re.sub(r"[^\w-]+", "_", source.stem, flags=re.UNICODE)[:36].strip("._") or "video"
         suffix = ".mkv" if request.cut_mode == "fast" else ".mp4"
-        destination = folder / f"{stem}_{request.id}{suffix}"
-        if canonical_path(source) == canonical_path(destination) or destination.exists():
+        destination = folder / clip_filename(request)
+        destination_io = Path(io_path(destination))
+        if canonical_path(source) == canonical_path(destination) or destination_io.exists():
             raise ValueError(
                 "Tên clip đã tồn tại. Vui lòng tạo tác vụ xuất mới; clip cũ được giữ nguyên."
             )
         fd, filename = tempfile.mkstemp(
-            prefix=f".vdt-{request.id}-", suffix=f".partial{suffix}", dir=folder
+            prefix=f".vdt-{request.id}-", suffix=f".partial{suffix}", dir=io_path(folder)
         )
         os.close(fd)
         temporary = Path(filename)
@@ -78,25 +85,27 @@ def export_clip(
             last_progress = [time.monotonic()]
 
             def read_progress():
+                emitted = -1
                 for raw in process.stdout:
                     last_progress[0] = time.monotonic()
                     line = raw.decode("utf-8", errors="replace").strip()
                     if progress and line.startswith("out_time_us="):
                         try:
                             ms = int(line.split("=", 1)[1]) / 1000
-                            progress(
-                                min(
-                                    99,
-                                    max(
-                                        0,
-                                        round(
-                                            ms
-                                            * 100
-                                            / (request.requested_out_ms - request.requested_in_ms)
-                                        ),
+                            value = min(
+                                99,
+                                max(
+                                    0,
+                                    round(
+                                        ms
+                                        * 100
+                                        / (request.requested_out_ms - request.requested_in_ms)
                                     ),
-                                )
+                                ),
                             )
+                            if value > emitted:
+                                progress(value)
+                                emitted = value
                         except ValueError:
                             pass
 
@@ -127,12 +136,17 @@ def export_clip(
             raise ValueError(
                 "Thời lượng clip lệch quá dung sai kiểm tra. Thử chế độ Precise hoặc điều chỉnh khoảng cắt."
             )
+        after_stat = source.stat()
+        if (after_stat.st_size, after_stat.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
+            raise ValueError(
+                "Video nguồn bị thay đổi trong khi cắt. Clip chưa được công bố; hãy mở lại nguồn."
+            )
         if cancel.is_set():
             raise ExportCancelled()
-        with destination.open("xb"):
+        with destination_io.open("xb"):
             pass
-        reserved = destination
-        os.replace(temporary, destination)
+        reserved = destination_io
+        os.replace(temporary, destination_io)
         temporary = reserved = None
         if progress:
             progress(100)

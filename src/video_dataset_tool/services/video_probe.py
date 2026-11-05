@@ -4,11 +4,26 @@ from fractions import Fraction
 from pathlib import Path
 
 from ..core.models import VideoMetadata
-from ..core.paths import find_binary, subprocess_options
+from ..core.paths import find_binary, io_path, subprocess_options
 
 
 class ProbeError(ValueError):
     pass
+
+
+def cached_metadata(source: dict | None) -> VideoMetadata | None:
+    """Reuse GUI metadata only while the source identity still matches SQLite."""
+    if not source or source.get("availability") != "present":
+        return None
+    try:
+        stat = Path(io_path(source["source_path"])).stat()
+        if (stat.st_size, stat.st_mtime_ns) != (source["file_size_bytes"], source["mtime_ns"]):
+            return None
+        if not all(source.get(key) for key in ("duration_ms", "width", "height", "video_codec")):
+            return None
+        return VideoMetadata(**{key: source[key] for key in VideoMetadata.__dataclass_fields__})
+    except (OSError, KeyError, TypeError):
+        return None
 
 
 def probe_video(path: str | Path, binary: str | None = None) -> VideoMetadata:
@@ -17,11 +32,12 @@ def probe_video(path: str | Path, binary: str | None = None) -> VideoMetadata:
         raise ProbeError(
             "Thiếu FFprobe. Cài FFmpeg và thêm thư mục bin vào PATH, sau đó mở lại ứng dụng."
         )
-    if not Path(path).is_file():
+    probe_path = io_path(path)
+    if not Path(probe_path).is_file():
         raise ProbeError("Không tìm thấy video nguồn hoặc không có quyền đọc.")
     try:
         result = subprocess.run(
-            [binary, "-v", "error", "-show_format", "-show_streams", "-of", "json", str(path)],
+            [binary, "-v", "error", "-show_format", "-show_streams", "-of", "json", probe_path],
             capture_output=True,
             encoding="utf-8",
             errors="replace",

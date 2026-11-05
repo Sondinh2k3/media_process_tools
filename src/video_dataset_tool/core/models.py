@@ -2,9 +2,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from .paths import canonical_path
+from .paths import canonical_path, io_path
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm", ".mts", ".m2ts", ".ts"}
+ENCODING_PRESETS = ("veryfast", "fast", "medium")
 CATEGORIES = {
     "positive": "Có tình huống nghi lấn chiếm",
     "hard_negative": "Dễ nhận nhầm",
@@ -45,10 +46,12 @@ class ClipRequest:
     event_end_ms: int | None = None
     source_size: int | None = None
     source_mtime_ns: int | None = None
+    source_filename: str | None = None
+    encoding_preset: str = "veryfast"
 
     @classmethod
     def create(cls, source_path, metadata, start, end, category, **kwargs):
-        stat = Path(source_path).stat()
+        stat = Path(io_path(source_path)).stat()
         return cls(
             str(uuid4()),
             kwargs.pop("source_video_id", ""),
@@ -59,6 +62,7 @@ class ClipRequest:
             category,
             source_size=stat.st_size,
             source_mtime_ns=stat.st_mtime_ns,
+            source_filename=kwargs.pop("source_filename", Path(source_path).name),
             **kwargs,
         )
 

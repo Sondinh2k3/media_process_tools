@@ -1,5 +1,7 @@
 import logging
+import os
 import sqlite3
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QEvent, QLockFile, Qt, QTimer, Slot
@@ -31,7 +33,7 @@ from ..core.models import VIDEO_EXTENSIONS, ClipRequest
 from ..core.paths import app_data_dir, canonical_path, find_binary
 from ..core.timecode import format_timecode, parse_timecode
 from ..core.validators import validate_request
-from ..services.video_probe import probe_video
+from ..services.video_probe import cached_metadata, probe_video
 from ..storage.database import Database
 from ..storage.repositories import Repository
 from ..workers.export_worker import ExportWorker
@@ -72,6 +74,7 @@ class MainWindow(QMainWindow):
         self.output_root = Path(saved_output) if saved_output else None
         self.export_worker = None
         self.export_results = []
+        self.export_started_at = None
         root = QWidget()
         self.setCentralWidget(root)
         self.layout = QVBoxLayout(root)
@@ -137,6 +140,9 @@ class MainWindow(QMainWindow):
         self.session_timer.setInterval(2000)
         self.session_timer.timeout.connect(self.autosave)
         self.session_timer.start()
+        self.export_timer = QTimer(self)
+        self.export_timer.setInterval(1000)
+        self.export_timer.timeout.connect(self.update_export_status)
         QApplication.instance().installEventFilter(self)
         missing = [name for name in ("ffmpeg", "ffprobe") if not find_binary(name)]
         if missing:
@@ -174,23 +180,27 @@ class MainWindow(QMainWindow):
                 self.repository.set_setting("last_source_dir", folder)
                 self.add_paths(
                     sorted(
-                        p
-                        for p in Path(folder).iterdir()
-                        if p.suffix.lower() in VIDEO_EXTENSIONS and p.is_file()
+                        Path(entry.path)
+                        for entry in os.scandir(folder)
+                        if Path(entry.name).suffix.lower() in VIDEO_EXTENSIONS and entry.is_file()
                     )
                 )
             except OSError:
                 self.show_error("Không đọc được thư mục. Kiểm tra quyền truy cập.")
 
     def add_paths(self, paths):
+        paths = list(paths)
+        records = self.repository.ensure_sources(paths)
         first = None
         existing = {
             self.sources.item(i).data(Qt.ItemDataRole.UserRole): self.sources.item(i)
             for i in range(self.sources.count())
         }
-        for path in paths:
+        was_blocked = self.sources.blockSignals(True)
+        self.sources.setUpdatesEnabled(False)
+        for path, record in zip(paths, records):
             key = canonical_path(path)
-            self.source_records[key] = self.repository.ensure_source(path)
+            self.source_records[key] = record
             if key not in existing:
                 item = QListWidgetItem(path.name)
                 item.setData(Qt.ItemDataRole.UserRole, key)
@@ -198,6 +208,8 @@ class MainWindow(QMainWindow):
                 self.sources.addItem(item)
                 existing[key] = item
             first = first or existing[key]
+        self.sources.setUpdatesEnabled(True)
+        self.sources.blockSignals(was_blocked)
         if first:
             if self.sources.currentItem() is first:
                 self.source_selected(first)
@@ -207,7 +219,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Thư mục không có video được hỗ trợ.")
         self.clip_table.refresh_sources()
 
-    def source_selected(self, item, previous=None):
+    def source_selected(self, item, previous=None, *, force_probe=False):
         if not item:
             return
         path = item.data(Qt.ItemDataRole.UserRole)
@@ -217,9 +229,15 @@ class MainWindow(QMainWindow):
         self.current_path = None
         self.current_metadata = None
         self.current_source_id = None
+        self.editor.set_source_ready(False)
         self.viewer.clear_source()
         self.viewer.setEnabled(False)
         self.metadata_label.setText("Đang đọc thông số…")
+        self.pending_probe = None
+        metadata = None if force_probe else cached_metadata(self.source_records.get(path))
+        if metadata is not None:
+            self.source_loaded(path, metadata, generation, cached=True)
+            return
         if self.tasks:
             self.pending_probe = (path, generation)
             return
@@ -254,13 +272,14 @@ class MainWindow(QMainWindow):
             self.pending_probe = None
             self.start_probe(path, generation)
 
-    def source_loaded(self, path, metadata, generation):
+    def source_loaded(self, path, metadata, generation, *, cached=False):
         if generation != self.load_generation:
             return
         try:
             source = self.repository.ensure_source(path)
-            self.repository.update_source(source["id"], metadata)
-            self.source_records[path] = self.repository.ensure_source(path)
+            if not cached:
+                self.repository.update_source(source["id"], metadata)
+                self.source_records[path] = self.repository.ensure_source(path)
         except (OSError, sqlite3.Error):
             logging.exception("Could not save source metadata")
             self.source_failed(
@@ -278,6 +297,7 @@ class MainWindow(QMainWindow):
         self.loading_editor = True
         self.editor.load_draft(draft, metadata.duration_ms)
         self.loading_editor = False
+        self.editor.set_source_ready(True)
         self.metadata_label.setText(
             f"{Path(path).name}\n{format_timecode(metadata.duration_ms)}\n{metadata.width} × {metadata.height} · {metadata.fps:.3f} FPS\n{metadata.video_codec} / {metadata.audio_codec or 'không âm thanh'}"
         )
@@ -346,8 +366,9 @@ class MainWindow(QMainWindow):
                 if self.viewer.pending_seek is not None
                 else self.viewer.player.position()
             )
-            self.drafts[self.current_path] = draft
-            self.repository.save_draft(self.current_source_id, draft)
+            if self.drafts.get(self.current_path) != draft:
+                self.repository.save_draft(self.current_source_id, draft)
+                self.drafts[self.current_path] = draft
 
     def choose_output(self):
         folder = QFileDialog.getExistingDirectory(
@@ -389,6 +410,7 @@ class MainWindow(QMainWindow):
             end,
             values["category"],
             cut_mode=values["mode"],
+            encoding_preset=values["preset"],
             notes=values["notes"],
             object_type=values["object_type"],
             review_status=values["review"],
@@ -400,6 +422,7 @@ class MainWindow(QMainWindow):
             else None,
             source_size=source["file_size_bytes"],
             source_mtime_ns=source["mtime_ns"],
+            source_filename=source["display_name"],
         )
         validate_request(request)
         return request
@@ -421,6 +444,8 @@ class MainWindow(QMainWindow):
             )
             self.clip_table.refresh()
             self.editor.set_busy(True)
+            self.export_started_at = time.monotonic()
+            self.export_timer.start()
             self.export_worker.progress.connect(self.editor.progress.setValue)
             self.export_worker.processing.connect(self.clip_table.refresh)
             self.export_worker.result_ready.connect(
@@ -441,6 +466,7 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def export_finished(self, result):
+        self.export_timer.stop()
         self.export_results.append(result)
         self.clip_table.refresh()
         self.statusBar().showMessage(
@@ -456,10 +482,30 @@ class MainWindow(QMainWindow):
         self.export_worker.deleteLater()
         self.export_worker = None
         self.editor.set_busy(False)
+        self.export_timer.stop()
+        self.export_started_at = None
+
+    def update_export_status(self):
+        if self.export_started_at is None or not self.export_worker:
+            return
+        elapsed = time.monotonic() - self.export_started_at
+        progress = self.editor.progress.value()
+        if not self.editor.cancel_button.isEnabled():
+            message = "Đang hủy và dọn file tạm"
+        elif progress >= 99:
+            message = "Đang hoàn tất và kiểm tra clip"
+        else:
+            message = f"Đang xuất {progress}%"
+            if progress >= 5:
+                remaining = max(0, round(elapsed * (100 - progress) / progress))
+                message += f" · còn khoảng {remaining} giây"
+        self.statusBar().showMessage(f"{message} · đã chạy {round(elapsed)} giây")
 
     def cancel_export(self):
         if self.export_worker:
             self.export_worker.cancel()
+            self.editor.cancel_button.setEnabled(False)
+            self.editor.cancel_button.setText("Đang hủy…")
             self.statusBar().showMessage("Đang hủy và dọn file tạm…")
 
     def update_output_label(self):
@@ -526,7 +572,7 @@ class MainWindow(QMainWindow):
         self.clip_table.refresh_sources()
         item = self.sources.currentItem()
         if item:
-            self.source_selected(item)
+            self.source_selected(item, force_probe=True)
 
     def export_csv(self):
         path, _ = QFileDialog.getSaveFileName(

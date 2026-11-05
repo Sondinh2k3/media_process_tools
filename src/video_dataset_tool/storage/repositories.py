@@ -8,7 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from ..core.models import ClipRequest, ExportResult, VideoMetadata
-from ..core.paths import canonical_path
+from ..core.paths import canonical_path, io_path
 from ..core.validators import validate_request
 from .database import Database
 
@@ -23,34 +23,59 @@ class Repository:
         self.connection = database.connection
 
     def ensure_source(self, path: str | Path) -> dict:
-        key = canonical_path(path)
-        row = self.connection.execute(
-            "SELECT * FROM source_videos WHERE source_path=?", (key,)
-        ).fetchone()
-        if row:
-            return dict(row)
-        stamp = utc_now()
-        try:
-            stat = Path(key).stat()
-            size, mtime, availability = stat.st_size, stat.st_mtime_ns, "present"
-        except OSError:
-            size, mtime, availability = None, None, "missing"
-        with self.connection:
-            self.connection.execute(
-                "INSERT INTO source_videos(id,source_path,display_name,file_size_bytes,mtime_ns,availability,created_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?)",
-                (str(uuid4()), key, Path(path).name, size, mtime, availability, stamp, stamp),
+        return self.ensure_sources([path])[0]
+
+    def ensure_sources(self, paths) -> list[dict]:
+        """Register a folder in one transaction; keep existing IDs and original names."""
+        paths = list(paths)
+        names = {canonical_path(path): Path(path).name for path in paths}
+        keys = list(names)
+        existing = {}
+        for offset in range(0, len(keys), 500):
+            batch = keys[offset : offset + 500]
+            query = (
+                "SELECT * FROM source_videos WHERE source_path IN ("
+                + ",".join("?" for _ in batch)
+                + ")"
             )
-        return dict(
-            self.connection.execute(
-                "SELECT * FROM source_videos WHERE source_path=?", (key,)
-            ).fetchone()
-        )
+            existing.update(
+                (row["source_path"], dict(row)) for row in self.connection.execute(query, batch)
+            )
+        stamp = utc_now()
+        additions = []
+        for key in keys:
+            if key in existing:
+                continue
+            try:
+                stat = Path(io_path(key)).stat()
+                size, mtime, availability = stat.st_size, stat.st_mtime_ns, "present"
+            except OSError:
+                size, mtime, availability = None, None, "missing"
+            additions.append(
+                (str(uuid4()), key, names[key], size, mtime, availability, stamp, stamp)
+            )
+        with self.connection:
+            self.connection.executemany(
+                "INSERT INTO source_videos(id,source_path,display_name,file_size_bytes,mtime_ns,availability,created_at,last_seen_at) VALUES(?,?,?,?,?,?,?,?)",
+                additions,
+            )
+        for offset in range(0, len(additions), 500):
+            batch = [row[1] for row in additions[offset : offset + 500]]
+            query = (
+                "SELECT * FROM source_videos WHERE source_path IN ("
+                + ",".join("?" for _ in batch)
+                + ")"
+            )
+            existing.update(
+                (row["source_path"], dict(row)) for row in self.connection.execute(query, batch)
+            )
+        return [existing[canonical_path(path)] for path in paths]
 
     def update_source(self, source_id: str, metadata: VideoMetadata):
         row = self.connection.execute(
             "SELECT source_path FROM source_videos WHERE id=?", (source_id,)
         ).fetchone()
-        stat = Path(row[0]).stat()
+        stat = Path(io_path(row[0])).stat()
         fields = asdict(metadata)
         fields.update(
             file_size_bytes=stat.st_size,
@@ -78,7 +103,7 @@ class Repository:
         with self.connection:
             for row in self.sources():
                 try:
-                    stat = Path(row["source_path"]).stat()
+                    stat = Path(io_path(row["source_path"])).stat()
                     state = (
                         "present"
                         if (stat.st_size, stat.st_mtime_ns)
@@ -88,13 +113,15 @@ class Repository:
                 except OSError:
                     state = "missing"
                 self.connection.execute(
-                    "UPDATE source_videos SET availability=? WHERE id=?", (state, row["id"])
+                    "UPDATE source_videos SET availability=? WHERE id=? AND availability<>?",
+                    (state, row["id"], state),
                 )
 
     def create_clip(self, request: ClipRequest, output_root: Path):
         validate_request(request)
         fields = asdict(request)
         fields.pop("metadata")
+        fields.pop("source_filename")  # Naming hint; source display_name is already persisted.
         fields["source_path_snapshot"] = fields.pop("source_path")
         fields["source_size_bytes"] = fields.pop("source_size")
         fields["source_mtime_ns"] = fields.pop("source_mtime_ns")
@@ -133,8 +160,8 @@ class Repository:
                 (*fields.values(), clip_id),
             )
 
-    def clips(self, source_id=None, category=None, status=None, search="") -> list[dict]:
-        query = "SELECT c.*,c.id AS clip_id,c.source_path_snapshot AS source_path,c.output_path AS clip_path,s.display_name,s.availability AS source_availability FROM clips c JOIN source_videos s ON s.id=c.source_video_id"
+    @staticmethod
+    def _clip_filters(source_id=None, category=None, status=None, search=""):
         conditions, values = [], []
         for field, value in (
             ("source_video_id", source_id),
@@ -150,12 +177,32 @@ class Repository:
             )
             term = "%" + search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
             values.extend([term] * 4)
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        return [
-            dict(row)
-            for row in self.connection.execute(query + " ORDER BY c.created_at DESC", values)
-        ]
+        return (" WHERE " + " AND ".join(conditions) if conditions else ""), values
+
+    def count_clips(self, source_id=None, category=None, status=None, search="") -> int:
+        where, values = self._clip_filters(source_id, category, status, search)
+        return self.connection.execute(
+            "SELECT COUNT(*) FROM clips c JOIN source_videos s ON s.id=c.source_video_id" + where,
+            values,
+        ).fetchone()[0]
+
+    def clips(
+        self, source_id=None, category=None, status=None, search="", *, limit=None, offset=0
+    ) -> list[dict]:
+        where, values = self._clip_filters(source_id, category, status, search)
+        query = "SELECT c.*,c.id AS clip_id,c.source_path_snapshot AS source_path,c.output_path AS clip_path,s.display_name,s.availability AS source_availability FROM clips c JOIN source_videos s ON s.id=c.source_video_id"
+        query += where + " ORDER BY c.created_at DESC,c.id DESC"
+        if limit is not None:
+            if (
+                not isinstance(limit, int)
+                or limit <= 0
+                or not isinstance(offset, int)
+                or offset < 0
+            ):
+                raise ValueError("Phân trang không hợp lệ.")
+            query += " LIMIT ? OFFSET ?"
+            values.extend((limit, offset))
+        return [dict(row) for row in self.connection.execute(query, values)]
 
     def get_setting(self, key: str, default=None):
         row = self.connection.execute(
@@ -171,14 +218,14 @@ class Repository:
     def set_setting(self, key: str, value):
         with self.connection:
             self.connection.execute(
-                "INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                "INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE app_settings.value<>excluded.value",
                 (key, json.dumps(value, ensure_ascii=False)),
             )
 
     def save_draft(self, source_id: str, draft: dict):
         with self.connection:
             self.connection.execute(
-                "INSERT INTO drafts VALUES(?,?) ON CONFLICT(source_video_id) DO UPDATE SET draft_json=excluded.draft_json",
+                "INSERT INTO drafts VALUES(?,?) ON CONFLICT(source_video_id) DO UPDATE SET draft_json=excluded.draft_json WHERE drafts.draft_json<>excluded.draft_json",
                 (source_id, json.dumps(draft, ensure_ascii=False)),
             )
 
@@ -224,6 +271,7 @@ class Repository:
             "notes",
             "review_status",
             "cut_mode",
+            "encoding_preset",
             "cut_precision",
             "status",
             "error_message",

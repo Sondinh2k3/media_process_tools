@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from ..core.models import ClipRequest
+from ..core.paths import io_path
 from ..core.validators import validate_request
 
 
@@ -25,7 +26,7 @@ def build_arguments(binary: str, request: ClipRequest, temporary_path: Path) -> 
             start,
             "-noautorotate",
             "-i",
-            request.source_path,
+            io_path(request.source_path),
             "-t",
             duration,
             "-map",
@@ -43,7 +44,7 @@ def build_arguments(binary: str, request: ClipRequest, temporary_path: Path) -> 
             start,
             "-noautorotate",
             "-i",
-            request.source_path,
+            io_path(request.source_path),
             "-t",
             duration,
             "-map",
@@ -53,7 +54,7 @@ def build_arguments(binary: str, request: ClipRequest, temporary_path: Path) -> 
             "-c:v",
             "libx264",
             "-preset",
-            "medium",
+            request.encoding_preset,
             "-crf",
             "18",
             "-c:a",

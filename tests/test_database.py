@@ -17,7 +17,7 @@ def test_migration_crud_reopen_csv_missing(synthetic_video, tmp_path):
     db_path = tmp_path / "data.sqlite3"
     database = Database(db_path)
     repo = Repository(database)
-    assert database.connection.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert database.connection.execute("PRAGMA user_version").fetchone()[0] == 2
     row = repo.ensure_source(source)
     assert repo.ensure_source(source.parent / "." / source.name)["id"] == row["id"]
     assert len(repo.sources()) == 1

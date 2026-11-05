@@ -1,5 +1,23 @@
 # Hướng dẫn sử dụng V1
 
+## Cắt nhanh bằng lệnh
+
+Không cần mở cửa sổ để cắt video. Từ thư mục repository:
+
+```powershell
+.\.venv\Scripts\python.exe -m video_dataset_tool cut --input ".\video\Video_000.mp4" --start 10.250 --end 20.750 --output-dir ".\exports\Video_000"
+```
+
+Đổi `--input` sang video ID của bạn, `--start`/`--end` sang khoảng cần cắt và `--output-dir` sang nơi lưu mong muốn. Có thể dùng `--duration 10.5` thay `--end`, hoặc thời gian `00:00:10.250`. Mặc định Precise xuất MP4; thêm `--mode fast` để sao chép luồng sang MKV với giới hạn keyframe.
+
+Tên clip giữ nguyên ID từ tên nguồn, ví dụ `Video_000__00-00-10.250_00-00-20.750__<UUID>.mp4`. Clip ghi trực tiếp trong thư mục bạn chọn; UUID phân biệt các lần xuất cùng ID/khoảng. Quy tắc giữ ID cũng áp dụng khi xuất bằng GUI; clip cũ không bị đổi tên.
+
+CLI dùng `uncertain` nếu chưa truyền `--category`. `--notes` lưu ghi chú; `--json` xuất kết quả cho script, tiến độ ở stderr. Ctrl+C hủy tác vụ, mã thoát 130. Lỗi xử lý trả mã 1 và thông báo rõ; không coi FFmpeg exit 0 là đủ để thành công.
+
+Precise mặc định dùng H.264 `veryfast`, CRF 18 để giảm thời gian chờ. Thêm `--preset medium` để dùng cấu hình cũ, hoặc `--preset fast`. Preset có đánh đổi giữa tốc độ, độ nén và chất lượng; cùng CRF không có nghĩa hình ảnh giống hệt nhau. Với `--mode fast`, preset không được dùng vì video được sao chép luồng.
+
+`--data-dir` chọn SQLite/log riêng, đặt được trước hoặc sau `cut`. Nếu để mặc định, GUI và CLI dùng chung dataset OS và không chạy cùng lúc trên cùng dataset. Dùng `--data-dir ".\exports\.dataset"` để tách lịch sử lệnh, rồi mở GUI với chính `--data-dir` đó để xem. Chi tiết và kết quả thử video thực tế: [CLI_VIDEO_VALIDATION.md](CLI_VIDEO_VALIDATION.md).
+
 ## Bắt đầu
 
 Chạy ứng dụng theo README từ terminal VS Code. Cửa sổ có ba vùng ngang: thư viện nguồn, trình phát, thông tin clip; lịch sử clip nằm phía dưới. Kéo vạch chia để thay đổi kích thước. Các nút xuất/xem trước/hủy luôn nằm ở cuối vùng thông tin, còn phần nhập liệu có thanh cuộn riêng.
@@ -41,6 +59,8 @@ Chọn **Thư mục xuất** có quyền ghi và đủ dung lượng. Clip đư�
 
 Bấm **Xuất clip** hoặc Ctrl+E. Metadata được lưu trước, có progress; nút xuất bị khóa đến khi worker kết thúc. Vẫn có thể xem hoặc đổi video và chỉnh bản nháp khác; tác vụ đang chạy giữ snapshot của thông tin tại lúc bấm xuất.
 
+Với Precise, chọn **Tốc độ mã hóa**: Veryfast (mặc định), Fast hoặc Medium (cấu hình cũ). Lựa chọn được giữ trong bản nháp của nguồn và metadata tác vụ. Nút xuất/xem trước chỉ bật khi nguồn và khoảng cắt hợp lệ. Thanh trạng thái có thời gian đã chạy và ước tính thời gian còn lại; phần kiểm tra cuối có thể cần thêm thời gian dù tiến độ đã tới 99%.
+
 **Hủy tác vụ xuất** dừng FFmpeg, xóa file tạm do ứng dụng sở hữu và lưu trạng thái `cancelled`. Nếu hủy trong bước FFprobe kiểm tra sau export, có thể phải chờ probe kết thúc (timeout tối đa 45 giây). Không dùng đóng cưỡng bức như một cách hủy thông thường.
 
 Trong khi đọc metadata hoặc xuất, đóng cửa sổ sẽ được từ chối kèm thông báo chờ/hủy. Sau khi tác vụ kết thúc, đóng lại để lưu phiên. Nếu mất điện/đóng cưỡng bức, tác vụ pending/processing được chuyển thành failed khi mở lại; clip đã công bố và file tạm còn sót được giữ để tránh xóa nhầm. Có thể kiểm tra thủ công file `.vdt-<UUID>-*.partial.*` trong thư mục xuất khi ứng dụng đã đóng.
@@ -48,6 +68,8 @@ Trong khi đọc metadata hoặc xuất, đóng cửa sổ sẽ được từ ch
 ## Lịch sử và CSV
 
 Lịch sử có đủ trạng thái chờ, đang xuất, hoàn tất, thất bại và đã hủy. Có thể kết hợp bộ lọc nguồn/nhóm/trạng thái với tìm kiếm; tìm kiếm tiếng Việt cần đúng dấu và SQLite không hỗ trợ đầy đủ đổi hoa/thường Unicode.
+
+Mỗi trang có tối đa **200 clip**. **Trước/Sau** chuyển trang; bộ đếm cho biết khoảng đang xem và tổng số kết quả. Đổi bộ lọc hoặc tìm kiếm trở về trang đầu. Tìm kiếm chờ 250 ms sau khi ngừng gõ để thao tác mượt hơn; Enter tìm ngay, nút × xóa từ khóa. Làm mới bảng giữ clip đang chọn nếu clip vẫn có trên trang.
 
 Chọn một dòng rồi **Chi tiết** (hoặc nhấp đúp) để xem UUID, đường dẫn, khoảng sự kiện, thời lượng thực đo và lỗi. **Mở thư mục chứa clip** dùng trình quản lý file của hệ điều hành. Không có chức năng xóa clip/video trong V1.
 
@@ -58,5 +80,7 @@ Chọn một dòng rồi **Chi tiết** (hoặc nhấp đúp) để xem UUID, đ
 Thiết lập mặc định ảnh hưởng video chưa có bản nháp; không ghi đè bản nháp đang có. Khởi động với `--data-dir` khác để dùng một dataset độc lập. Chỉ mở một cửa sổ trên mỗi dataset để tránh phục hồi nhầm tác vụ đang chạy.
 
 **Kiểm tra nguồn** đánh dấu mất nguồn/đã thay đổi. Nếu file bị di chuyển, ứng dụng giữ lịch sử, không tự tìm hoặc di chuyển file. Nếu file tại cùng đường dẫn đã bị thay nội dung, thông số mới chỉ được cập nhật sau khi mở lại; mỗi clip vẫn giữ size/mtime snapshot của nguồn lúc xuất.
+
+Mở lại nguồn có size/mtime không đổi sẽ dùng metadata đã lưu; **Kiểm tra nguồn** luôn chạy FFprobe lại cho nguồn đang chọn. Kiểm tra cache dựa vào size/mtime, không băm toàn bộ video trong thao tác thường. Bản nháp không đổi không phát sinh ghi SQLite lặp lại. Database cũ tự nâng cấp schema 2 khi mở; sao lưu như hướng dẫn bên dưới, dùng phiên bản hiện tại để mở lại dataset đã nâng cấp.
 
 Sao lưu: đóng ứng dụng, sao chép cả thư mục dữ liệu ứng dụng và thư mục clip. CSV không thay thế SQLite. Log chứa thông tin kỹ thuật và có thể chứa đường dẫn cục bộ; chỉ chia sẻ sau khi đã xem nội dung.

@@ -5,7 +5,28 @@ from pathlib import Path
 
 
 def canonical_path(path: str | Path) -> str:
-    return os.path.normcase(str(Path(path).expanduser().resolve()))
+    resolved = str(Path(path).expanduser().resolve())
+    if sys.platform == "win32":
+        if resolved.startswith("\\\\?\\UNC\\"):
+            resolved = "\\\\" + resolved[8:]
+        elif resolved.startswith("\\\\?\\"):
+            resolved = resolved[4:]
+    return os.path.normcase(resolved)
+
+
+def io_path(path: str | Path) -> str:
+    """Use Windows extended paths for long filesystem/FFmpeg paths, preserving short arguments."""
+    value = str(path)
+    if sys.platform != "win32" or value.startswith("\\\\?\\"):
+        return value
+    absolute = str(Path(value).expanduser().resolve())
+    if absolute.startswith("\\\\?\\"):
+        return absolute
+    if len(absolute) < 248:
+        return value
+    if absolute.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absolute[2:]
+    return "\\\\?\\" + absolute
 
 
 def app_data_dir() -> Path:
